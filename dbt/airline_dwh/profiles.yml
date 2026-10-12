@@ -5,7 +5,7 @@
 #
 # Switch with:  dbt build --target postgres   (or set DBT_TARGET=postgres)
 airline_dwh:
-  target: "{{ env_var('DBT_TARGET', 'postgres') }}"
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
   outputs:
     postgres:
       type: postgres

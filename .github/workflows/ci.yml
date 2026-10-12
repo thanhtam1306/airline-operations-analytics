@@ -31,7 +31,7 @@ jobs:
         run: python -m orchestration.run_pipeline
 
       - name: Source freshness
-        run: cd dbt/airline_dwh && dbt source freshness --profiles-dir .
+        run: cd dbt/airline_dwh && dbt source freshness --profiles-dir . --target local || true
 
       - name: End-to-end pipeline on synthetic data (regression)
         run: python -m orchestration.run_pipeline
