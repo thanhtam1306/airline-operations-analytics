@@ -28,6 +28,8 @@ quality/expectations/uncommitted/
 
 # Generated BI exports + doc previews
 dashboards/powerbi/export/
+data/clean/
+output/
 docs/img/_preview_*.png
 
 # OS / editor
@@ -35,3 +37,10 @@ docs/img/_preview_*.png
 .idea/
 .vscode/
 *.log
+catboost_info/
+notebooks/catboost_info/
+scratch/
+certs/
+.agents/
+Gemini.md
+PLAN.md

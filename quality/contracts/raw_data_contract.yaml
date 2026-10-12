@@ -1,0 +1,393 @@
+# ==============================================================================
+# DATA CONTRACT: AIRLINE DATA PLATFORM - RAW INGESTION LAYER
+# Version: 1.0.0
+# Target Layer: raw
+# Owner: Data Engineering & Platform Team
+# Description:
+#   Formal Data Contract specifying schema, invariants, and Great Expectations
+#   validation suites for freshly-landed raw data across supported sources
+#   (synthetic benchmark and BTS US DOT real feeds).
+# ==============================================================================
+
+version: "1.0.0"
+layer: "raw"
+description: "Data Contract and Quality Expectations for Raw Ingestion Gateway"
+
+contracts:
+  # ----------------------------------------------------------------------------
+  # FLIGHTS TABLE CONTRACT
+  # ----------------------------------------------------------------------------
+  flights:
+    description: "Domestic flight operations, schedules, delays, and cancellations"
+    grain: ["flight_date", "carrier_code", "flight_number", "origin", "scheduled_dep_time"]
+    columns:
+      flight_id:
+        type: "string"
+        description: "Unique synthetic flight identifier (contains injected duplicates in synthetic mode)"
+      flight_date:
+        type: "date"
+        description: "Date of flight operation (YYYY-MM-DD)"
+        nullable: false
+      carrier_code:
+        type: "string"
+        description: "2-3 character IATA airline carrier code"
+        nullable: false
+      flight_number:
+        type: "integer"
+        description: "Carrier flight number"
+        nullable: false
+      tail_number:
+        type: "string"
+        description: "Aircraft tail registration number"
+        nullable: true
+      origin:
+        type: "string"
+        description: "3-letter IATA departure airport code"
+        nullable: false
+      dest:
+        type: "string"
+        description: "3-letter IATA arrival airport code"
+        nullable: false
+      scheduled_dep_time:
+        type: "string"
+        description: "Scheduled local departure time (HHMM)"
+      dep_time:
+        type: "string"
+        description: "Actual local departure time (HHMM)"
+        nullable: true
+      dep_delay_min:
+        type: "float"
+        description: "Departure delay in minutes (negative = early, sentinel -9999 for sensor dropouts)"
+      scheduled_arr_time:
+        type: "string"
+        description: "Scheduled local arrival time (HHMM)"
+      arr_time:
+        type: "string"
+        description: "Actual local arrival time (HHMM)"
+        nullable: true
+      arr_delay_min:
+        type: "float"
+        description: "Arrival delay in minutes (negative = early)"
+      cancelled:
+        type: "integer"
+        description: "Flight cancellation flag (1 = cancelled, 0 = operated)"
+        nullable: false
+      cancellation_code:
+        type: "string"
+        description: "Reason for cancellation: A (Carrier), B (Weather), C (NAS), D (Security)"
+        nullable: true
+      diverted:
+        type: "integer"
+        description: "Flight diversion flag (1 = diverted, 0 = not diverted)"
+      distance_miles:
+        type: "float"
+        description: "Direct flight route distance in miles"
+        nullable: false
+      carrier_delay_min:
+        type: "float"
+        description: "Delay attributed to carrier operations"
+      weather_delay_min:
+        type: "float"
+        description: "Delay attributed to significant weather events"
+      nas_delay_min:
+        type: "float"
+        description: "Delay attributed to National Aviation System"
+      security_delay_min:
+        type: "float"
+        description: "Delay attributed to security issues"
+      late_aircraft_delay_min:
+        type: "float"
+        description: "Delay attributed to previous flight arrival delay"
+
+    expectations:
+      synthetic:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "flight_id" }
+          severity: "critical"
+          description: "Flight ID must be non-null"
+        - expectation: "expect_column_values_to_be_unique"
+          kwargs: { column: "flight_id" }
+          severity: "critical"
+          description: "Synthetic contains 360 injected duplicate IDs to test staging deduplication"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "flight_date" }
+          severity: "critical"
+          description: "Flight date is required for temporal partitioning"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code is required for dimension joins"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "origin", use_reference: "VALID_AIRPORTS" }
+          severity: "critical"
+          description: "Origin airport must be in valid US airport reference set"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "dest", use_reference: "VALID_AIRPORTS" }
+          severity: "critical"
+          description: "Destination airport contains 89 injected orphan 'ZZZ' codes"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "cancelled", value_set: [0, 1] }
+          severity: "critical"
+          description: "Cancelled indicator must be binary (0 or 1)"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "cancellation_code", use_reference: "CANCELLATION_CODES" }
+          severity: "warn"
+          description: "Cancellation code must match BTS categories (A, B, C, D)"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "dep_delay_min", min_value: -120, max_value: 1800 }
+          severity: "critical"
+          description: "Contains 116 injected sentinel values (-9999) from sensor loss"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "arr_delay_min", min_value: -120, max_value: 1800 }
+          severity: "warn"
+          description: "Arrival delay reasonable bounds"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "tail_number", mostly: 0.99 }
+          severity: "warn"
+          description: "Tail number present on at least 99% of scheduled flights"
+        - expectation: "expect_table_row_count_to_be_between"
+          kwargs: { min_value: 1000, max_value: 5000000 }
+          severity: "warn"
+          description: "Expected batch volume range for synthetic data"
+
+      bts:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "flight_id" }
+          severity: "critical"
+          description: "Flight ID generated by BTS adapter must not be null"
+        - expectation: "expect_compound_columns_to_be_unique"
+          kwargs:
+            column_list: ["flight_date", "carrier_code", "flight_number", "origin", "scheduled_departure_min"]
+            mostly: 0.999
+          severity: "warn"
+          description: "BTS real data contains ~3 genuine duplicates from upstream reporting"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "flight_date" }
+          severity: "critical"
+          description: "Flight date required"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code required"
+        - expectation: "expect_column_values_to_match_regex"
+          kwargs: { column: "origin", regex: "^[A-Z0-9]{3}$" }
+          severity: "critical"
+          description: "Origin airport code format check"
+        - expectation: "expect_column_values_to_match_regex"
+          kwargs: { column: "dest", regex: "^[A-Z0-9]{3}$" }
+          severity: "critical"
+          description: "Destination airport code format check"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "cancelled", value_set: [0, 1] }
+          severity: "critical"
+          description: "Binary cancellation flag"
+        - expectation: "expect_column_values_to_be_null"
+          kwargs:
+            column: "dep_delay_min"
+            row_condition: "cancelled==1"
+            condition_parser: "pandas"
+            mostly: 0.9
+          severity: "warn"
+          description: "Cancelled flights in BTS typically omit departure delays"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "dep_delay_min", min_value: -60, max_value: 2000 }
+          severity: "warn"
+          description: "Realistic departure delay boundaries"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "arr_delay_min", min_value: -90, max_value: 2200 }
+          severity: "warn"
+          description: "Realistic arrival delay boundaries"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "distance_miles", min_value: 10, max_value: 6000 }
+          severity: "critical"
+          description: "Distance ranges from short hops (10.6 mi) to transcontinental"
+        - expectation: "expect_table_row_count_to_be_between"
+          kwargs: { min_value: 100000, max_value: 50000000 }
+          severity: "warn"
+          description: "BTS multi-million flight batch bounds"
+
+  # ----------------------------------------------------------------------------
+  # AIRPORTS TABLE CONTRACT
+  # ----------------------------------------------------------------------------
+  airports:
+    description: "Airport reference metadata and geographical coordinates"
+    grain: ["airport_code"]
+    columns:
+      airport_code:
+        type: "string"
+        description: "3-letter uppercase IATA airport code"
+        nullable: false
+        unique: true
+      airport_name:
+        type: "string"
+        description: "Full descriptive official name of the airport"
+        nullable: false
+      city:
+        type: "string"
+        description: "Municipality or metropolitan area served"
+        nullable: false
+      state:
+        type: "string"
+        description: "2-letter US state postal abbreviation"
+        nullable: false
+      latitude:
+        type: "float"
+        description: "Geographic coordinate: latitude (-90 to 90)"
+        nullable: false
+      longitude:
+        type: "float"
+        description: "Geographic coordinate: longitude (-180 to 180)"
+        nullable: false
+      timezone:
+        type: "string"
+        description: "IANA timezone name"
+        nullable: false
+      is_hub:
+        type: "integer"
+        description: "Major hub classification indicator (0 or 1)"
+
+    expectations:
+      synthetic:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "airport_code" }
+          severity: "critical"
+          description: "Airport code cannot be null"
+        - expectation: "expect_column_values_to_be_unique"
+          kwargs: { column: "airport_code" }
+          severity: "critical"
+          description: "Airport code must be unique primary key"
+        - expectation: "expect_column_value_lengths_to_equal"
+          kwargs: { column: "airport_code", value: 3 }
+          severity: "critical"
+          description: "Airport code must be exactly 3 characters"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "latitude", min_value: -90, max_value: 90 }
+          severity: "critical"
+          description: "Valid latitude range"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "longitude", min_value: -180, max_value: 180 }
+          severity: "critical"
+          description: "Valid longitude range"
+
+      bts:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "airport_code" }
+          severity: "critical"
+          description: "Airport code cannot be null"
+        - expectation: "expect_column_values_to_be_unique"
+          kwargs: { column: "airport_code" }
+          severity: "critical"
+          description: "Airport code must be unique"
+        - expectation: "expect_column_value_lengths_to_equal"
+          kwargs: { column: "airport_code", value: 3 }
+          severity: "critical"
+          description: "Airport code length must equal 3"
+
+  # ----------------------------------------------------------------------------
+  # CARRIERS TABLE CONTRACT
+  # ----------------------------------------------------------------------------
+  carriers:
+    description: "Reporting air carrier dimension metadata"
+    grain: ["carrier_code"]
+    columns:
+      carrier_code:
+        type: "string"
+        description: "2-3 character unique carrier identifier"
+        nullable: false
+        unique: true
+      carrier_name:
+        type: "string"
+        description: "Commercial operating airline name"
+        nullable: false
+      carrier_type:
+        type: "string"
+        description: "Business model classification (Legacy, Low-Cost, Regional)"
+        nullable: true
+
+    expectations:
+      synthetic:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code cannot be null"
+        - expectation: "expect_column_values_to_be_unique"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code must be unique primary key"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_name" }
+          severity: "critical"
+          description: "Carrier name cannot be null"
+
+      bts:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code cannot be null"
+        - expectation: "expect_column_values_to_be_unique"
+          kwargs: { column: "carrier_code" }
+          severity: "critical"
+          description: "Carrier code must be unique"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "carrier_name" }
+          severity: "critical"
+          description: "Carrier name cannot be null"
+
+  # ----------------------------------------------------------------------------
+  # WEATHER TABLE CONTRACT
+  # ----------------------------------------------------------------------------
+  weather:
+    description: "Daily observed meteorological conditions per airport"
+    grain: ["weather_date", "airport_code"]
+    columns:
+      weather_date:
+        type: "date"
+        description: "Observation date (YYYY-MM-DD)"
+        nullable: false
+      airport_code:
+        type: "string"
+        description: "3-letter airport code for station location"
+        nullable: false
+      temperature_f:
+        type: "float"
+        description: "Average daily temperature in Fahrenheit"
+      precipitation_in:
+        type: "float"
+        description: "Total daily rainfall / liquid precipitation in inches"
+      snowfall_in:
+        type: "float"
+        description: "Total daily snowfall accumulation in inches"
+      wind_speed_mph:
+        type: "float"
+        description: "Sustained average wind speed in miles per hour"
+      visibility_miles:
+        type: "float"
+        description: "Horizontal visual range in miles"
+      is_severe:
+        type: "integer"
+        description: "Severe meteorological event indicator (0 or 1)"
+
+    expectations:
+      synthetic:
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "weather_date" }
+          severity: "critical"
+          description: "Observation date is mandatory"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "airport_code" }
+          severity: "critical"
+          description: "Station airport code is mandatory"
+        - expectation: "expect_column_values_to_not_be_null"
+          kwargs: { column: "precipitation_in", mostly: 0.95 }
+          severity: "warn"
+          description: "Precipitation recorded on at least 95% of observations"
+        - expectation: "expect_column_values_to_be_between"
+          kwargs: { column: "temperature_f", min_value: -40, max_value: 130 }
+          severity: "warn"
+          description: "Physical reasonable range for surface temperature"
+        - expectation: "expect_column_values_to_be_in_set"
+          kwargs: { column: "is_severe", value_set: [0, 1] }
+          severity: "critical"
+          description: "Severe flag must be binary (0 or 1)"
+
+      bts: []  # BTS feed has no external weather data; table is an empty contract

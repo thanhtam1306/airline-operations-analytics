@@ -3,6 +3,7 @@ Ingestion driver: land every source into the raw warehouse.
 
     python -m ingestion.run_ingestion                # synthetic (default)
     DATA_SOURCE=bts python -m ingestion.run_ingestion  # real US DOT data
+    python -m ingestion.run_ingestion --validate     # validate against Data Contracts at gateway
 
 Two source modes, one raw contract:
   * synthetic — extract CSVs from the generator, load via pandas (small data).
@@ -13,6 +14,24 @@ Talend analogy: this is the parent Job that wires the input components
 (extract) to the database output components (load) and records run metadata.
 """
 from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+# Auto-re-exec in project virtualenv if running in system Python and pandas is not present
+try:
+    import pandas  # noqa: F401
+except ModuleNotFoundError:
+    project_root = Path(__file__).resolve().parent.parent
+    venv_py = project_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        cmd = [str(venv_py), "-m", "ingestion.run_ingestion"] + sys.argv[1:]
+        res = subprocess.run(cmd)
+        sys.exit(res.returncode)
+    raise
 
 from config import settings, get_duckdb_connection
 from ingestion.extract import extract_all
@@ -51,41 +70,84 @@ def run_bts() -> None:
         con.close()
 
 
-def run() -> None:
+def run(validate: bool = False, strict: bool = False) -> None:
     if settings.data_source == "bts":
         run_bts()
-        return
+    else:
+        batch_id = new_batch_id()
+        logger.info("=== ingestion batch %s (source=synthetic, warehouse=%s) ===",
+                    batch_id, settings.warehouse)
 
-    batch_id = new_batch_id()
-    logger.info("=== ingestion batch %s (source=synthetic, warehouse=%s) ===",
-                batch_id, settings.warehouse)
+        frames = extract_all()
 
-    frames = extract_all()
+        if settings.warehouse == "postgres":
+            from config import get_postgres_engine
+            from sqlalchemy import text
 
-    con = get_duckdb_connection()
-    try:
-        ensure_audit_table(con)
-        total = 0
-        for source_name, table in SOURCE_TO_TABLE.items():
-            df = frames[source_name]
-            total += load_dataframe(
-                con, df, table=table,
-                source_file=settings.raw_files[source_name], batch_id=batch_id,
-            )
-        logger.info("=== ingestion complete: %s rows across %d tables ===",
-                    f"{total:,}", len(SOURCE_TO_TABLE))
+            ensure_audit_table()
+            total = 0
+            for source_name, table in SOURCE_TO_TABLE.items():
+                df = frames[source_name]
+                total += load_dataframe(
+                    None, df, table=table,
+                    source_file=settings.raw_files[source_name], batch_id=batch_id,
+                )
+            logger.info("=== ingestion complete: %s rows across %d tables ===",
+                        f"{total:,}", len(SOURCE_TO_TABLE))
 
-        preview = con.sql(
-            f"SELECT target_table, rows_extracted, rows_loaded, status "
-            f"FROM {settings.raw_schema}._ingestion_audit WHERE batch_id = '{batch_id}' "
-            f"ORDER BY target_table"
-        ).fetchall()
-        logger.info("audit:")
-        for row in preview:
-            logger.info("   %-28s extracted=%-8s loaded=%-8s %s", *row)
-    finally:
-        con.close()
+            with get_postgres_engine().connect() as conn:
+                preview = conn.execute(
+                    text(
+                        f"SELECT target_table, rows_extracted, rows_loaded, status "
+                        f"FROM {settings.raw_schema}._ingestion_audit WHERE batch_id = '{batch_id}' "
+                        f"ORDER BY target_table"
+                    )
+                ).fetchall()
+            logger.info("audit:")
+            for row in preview:
+                logger.info("   %-28s extracted=%-8s loaded=%-8s %s", *row)
+
+        else:
+            con = get_duckdb_connection()
+            try:
+                ensure_audit_table(con)
+                total = 0
+                for source_name, table in SOURCE_TO_TABLE.items():
+                    df = frames[source_name]
+                    total += load_dataframe(
+                        con, df, table=table,
+                        source_file=settings.raw_files[source_name], batch_id=batch_id,
+                    )
+                logger.info("=== ingestion complete: %s rows across %d tables ===",
+                            f"{total:,}", len(SOURCE_TO_TABLE))
+
+                preview = con.sql(
+                    f"SELECT target_table, rows_extracted, rows_loaded, status "
+                    f"FROM {settings.raw_schema}._ingestion_audit WHERE batch_id = '{batch_id}' "
+                    f"ORDER BY target_table"
+                ).fetchall()
+                logger.info("audit:")
+                for row in preview:
+                    logger.info("   %-28s extracted=%-8s loaded=%-8s %s", *row)
+            finally:
+                con.close()
+
+    if validate:
+        logger.info("=== Gateway Data Contract Validation (Great Expectations) ===")
+        from quality.validate import run as validate_raw
+        code = validate_raw(strict=strict)
+        if strict and code != 0:
+            raise RuntimeError(f"Ingestion gateway quality validation failed with code {code}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingestion driver into raw layer")
+    parser.add_argument("--validate", action="store_true", help="Run Great Expectations validation at gateway")
+    parser.add_argument("--strict", action="store_true", help="Fail if critical data contract expectations fail")
+    args = parser.parse_args()
+
+    run(validate=args.validate, strict=args.strict)
 
 
 if __name__ == "__main__":
-    run()
+    main()

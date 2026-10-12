@@ -47,15 +47,22 @@ pipeline: ## Run the entire pipeline end-to-end (SOURCE=synthetic|bts)
 profile-data: ## Profile the BTS files -> docs/data_profile.md
 	python scripts/profile_data.py
 
-train: ## Train delay models (baseline first, then LightGBM + model card)
-	python ml/train.py --model baseline
-	python ml/train.py --model lgbm
+train: ## Train delay models (tournament across baseline, lgbm, xgboost, catboost, ensemble)
+	python ml/train.py --model tournament
 
-serve-api: ## Run the delay-risk API (http://localhost:8000)
-	uvicorn ml.api:app --reload --port 8000
+serve-api: ## Run the delay-risk API & Copilot Web UI (http://localhost:8000)
+	uvicorn ml.api:app --reload --host 0.0.0.0 --port 8000
+
+skyops: ## Launch the SkyOps Copilot Web Console & API (http://skyops.local:8000)
+	uvicorn ml.api:app --reload --host 0.0.0.0 --port 8000
 
 dashboard: ## Launch the Streamlit analytics dashboard
 	streamlit run dashboards/streamlit_app.py
+
+export-powerbi: ## Export dbt marts and ML regulatory predictions to Parquet for Power BI
+	python scripts/export_marts.py
+	python scripts/export_ml_powerbi.py
+
 
 test: ## Run python unit tests
 	python -m pytest -q

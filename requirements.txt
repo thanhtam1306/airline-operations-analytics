@@ -2,12 +2,15 @@
 # AI-Ready Airline Data Pipeline & Analytics Platform
 # Core pipeline dependencies (local-first, cloud-ready)
 # ------------------------------------------------------------------
-# Warehouse
+# Warehouse (Multi-warehouse support: DuckDB / PostgreSQL / Snowflake)
 duckdb>=1.1,<2.0            # local embedded warehouse (Snowflake stand-in)
+psycopg2-binary>=2.9        # postgres adapter
+SQLAlchemy>=2.0             # sql engine
 
 # Transformations (dbt)
 dbt-core>=1.8,<1.10
-dbt-duckdb>=1.8,<1.10       # local adapter
+dbt-duckdb>=1.8,<1.10       # local duckdb adapter
+dbt-postgres>=1.8,<1.10     # local postgres adapter
 # dbt-snowflake>=1.8,<1.10  # uncomment to run against real Snowflake
 
 # Data quality
@@ -29,6 +32,15 @@ plotly>=5.18
 matplotlib>=3.7          # static charts for docs/report
 reportlab>=4.0           # project report PDF
 pytest>=8.0
+
+# Machine Learning & API Serving
+scikit-learn>=1.4
+lightgbm>=4.0
+xgboost>=2.0
+catboost>=1.2
+fastapi>=0.110
+uvicorn>=0.28
+python-pptx>=1.0            # PowerPoint slide insight export
 
 # ------------------------------------------------------------------
 # Airflow runs in its own container (see airflow/requirements-airflow.txt)

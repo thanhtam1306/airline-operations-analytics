@@ -48,9 +48,393 @@ Total Delay Minutes =
     [Carrier Delay Minutes] + [Weather Delay Minutes] + [NAS Delay Minutes]
     + [Security Delay Minutes] + [Late Aircraft Delay Minutes]
 
+// --- Advanced Business Insights (Giai đoạn 3.2) -----------------
+Make-up Flights =
+CALCULATE (
+    [Total Flights],
+    fact_flights[dep_delay_min] > 15,
+    fact_flights[arr_delay_min] <= 15,
+    fact_flights[is_cancelled] = FALSE ()
+)
+
+Make-up Flight % =
+DIVIDE (
+    [Make-up Flights],
+    CALCULATE (
+        [Total Flights],
+        fact_flights[dep_delay_min] > 15,
+        fact_flights[is_cancelled] = FALSE ()
+    )
+)
+
+Avg Make-up Minutes =
+CALCULATE (
+    AVERAGE ( fact_flights[dep_delay_min] - fact_flights[arr_delay_min] ),
+    fact_flights[dep_delay_min] > 15,
+    fact_flights[is_cancelled] = FALSE ()
+)
+
+Late Aircraft Delay % =
+DIVIDE ( [Late Aircraft Delay Minutes], [Total Delay Minutes] )
+
+Carrier Delay % =
+DIVIDE ( [Carrier Delay Minutes], [Total Delay Minutes] )
+
+NAS Delay % =
+DIVIDE ( [NAS Delay Minutes], [Total Delay Minutes] )
+
+Weather Delay % =
+DIVIDE ( [Weather Delay Minutes], [Total Delay Minutes] )
+
+// --- Benchmarks & Conditional Formatting -------------------------
+Target On-Time % = 0.80
+
+On-Time KPI Color =
+SWITCH (
+    TRUE (),
+    [On-Time %] >= 0.80, "#2ECC71",  // Xanh lá (Đạt chuẩn FAA/DOT)
+    [On-Time %] >= 0.75, "#F39C12",  // Vàng cam (Cần cảnh báo)
+    "#E74C3C"                        // Đỏ (Dưới tiêu chuẩn)
+)
+
 // Destination-based analysis using the inactive relationship
 Flights To Destination =
 CALCULATE (
     [Total Flights],
     USERELATIONSHIP ( fact_flights[dest_airport_key], dim_airport[airport_key] )
 )
+
+// ==================================================================
+// --- TRANG 3: HUB BOTTLENECKS & ROUTE PERFORMANCE -----------------
+// ==================================================================
+
+// [Calculated Columns - Thêm vào bảng fact_flights]:
+// Route = fact_flights[origin_airport] & " -> " & fact_flights[dest_airport]
+// Distance Category = 
+// SWITCH (
+//     TRUE (),
+//     fact_flights[distance_miles] < 500, "1. Short-haul (< 500 mi)",
+//     fact_flights[distance_miles] <= 1500, "2. Medium-haul (500-1500 mi)",
+//     "3. Long-haul (> 1500 mi)"
+// )
+
+// [Measures - Thêm vào bảng fact_flights]:
+Total Active Routes = 
+CALCULATE (
+    DISTINCTCOUNT ( fact_flights[Route] ),
+    fact_flights[is_cancelled] = FALSE ()
+)
+
+Avg Flight Distance = 
+CALCULATE (
+    AVERAGE ( fact_flights[distance_miles] ),
+    fact_flights[is_cancelled] = FALSE ()
+)
+
+Hub Total Flights = 
+CALCULATE (
+    [Total Flights],
+    dim_airport[is_major_hub] = TRUE ()
+)
+
+Hub On-Time % = 
+CALCULATE (
+    [On-Time %],
+    dim_airport[is_major_hub] = TRUE ()
+)
+
+Hub Avg Departure Delay = 
+CALCULATE (
+    [Avg Departure Delay],
+    dim_airport[is_major_hub] = TRUE ()
+)
+
+Hub Delay Severity Color = 
+SWITCH (
+    TRUE (),
+    [Avg Departure Delay] <= 8, "#2ECC71",   // Xanh lá (Thông suốt < 8 phút)
+    [Avg Departure Delay] <= 12, "#F39C12",  // Vàng cam (Cảnh báo nghẽn 8-12 phút)
+    "#E74C3C"                               // Đỏ rượu (Nghẽn nghiêm trọng > 12 phút)
+)
+
+// ==================================================================
+// --- TRANG 4: AI PREDICTIVE RISK & AVIATION REGULATORY GOVERNANCE -
+// ==================================================================
+
+// --- 1. Nhóm Chỉ số Dự báo Máy học (AI Predictions) ---------------
+Total Scored Flights = COUNTROWS ( fct_flight_regulatory_predictions )
+
+High Risk Flights (AI Alert) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_predicted_delayed] = TRUE ()
+)
+
+High Risk Flight % = 
+DIVIDE ( [High Risk Flights (AI Alert)], [Total Scored Flights] )
+
+Elevated Risk Flights = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[risk_band] = "Elevated"
+)
+
+Normal Safe Flights = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[risk_band] = "Normal"
+)
+
+Avg Predicted Delay Probability = 
+AVERAGE ( fct_flight_regulatory_predictions[delay_probability] )
+
+// --- 2. Nhóm Chỉ số Đấu trường Mô hình (Tournament Champion) -------
+Tournament Winner Model = 
+CALCULATE (
+    MAX ( ml_tournament_metrics[model_name] ),
+    ml_tournament_metrics[is_winner] = TRUE ()
+)
+
+Tournament Winner Test AUC = 
+CALCULATE (
+    MAX ( ml_tournament_metrics[test_auc] ),
+    ml_tournament_metrics[is_winner] = TRUE ()
+)
+
+Tournament Winner Lift @ 10% = 
+CALCULATE (
+    MAX ( ml_tournament_metrics[test_lift_top10pct] ),
+    ml_tournament_metrics[is_winner] = TRUE ()
+)
+
+// --- 3. Nhóm Chỉ số Rủi ro Pháp lý & Chế tài (US DOT / FAA / CAAV) -
+Tarmac Delay Risk Count (14 CFR § 259.4) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_tarmac_risk] = TRUE ()
+)
+
+Potential DOT Penalty Exposure ($) = 
+SUM ( fct_flight_regulatory_predictions[max_penalty_exposure_usd] )
+
+Crew Time-out Risk Count (FAR Part 117) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_crew_duty_risk] = TRUE ()
+)
+
+Mandatory Refund Risk Count (14 CFR § 260.6) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_cash_refund_mandate] = TRUE ()
+)
+
+Interline Rebooking Mandate Count (14 CFR § 259.5) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_rebooking_mandate] = TRUE ()
+)
+
+Chronically Delayed Routes Count (14 CFR § 234.11) = 
+CALCULATE (
+    COUNTROWS ( fct_flight_regulatory_predictions ),
+    fct_flight_regulatory_predictions[is_chronic_route_risk] = TRUE ()
+)
+
+// --- 4. Màu sắc & Định dạng Điều kiện (Conditional Formatting) ------
+Risk Band Color = 
+SWITCH (
+    SELECTEDVALUE ( fct_flight_regulatory_predictions[risk_band] ),
+    "High", "#E74C3C",        // Đỏ (Rủi ro cao & nguy cơ chế tài)
+    "Elevated", "#F39C12",    // Cam (Cần giám sát & cập nhật hành khách)
+    "Normal", "#2ECC71",      // Xanh lá (Hành lang bay an toàn)
+    "#95A5A6"                 // Xám (Mặc định)
+)
+
+Penalty Exposure Severity Color = 
+SWITCH (
+    TRUE (),
+    [Potential DOT Penalty Exposure ($)] >= 50000000, "#C0392B", // Đỏ sẫm (> $50M rủi ro chế tài)
+    [Potential DOT Penalty Exposure ($)] > 0, "#E67E22",         // Vàng cam (Có nguy cơ chế tài)
+    "#27AE60"                                                    // Xanh lá (An toàn)
+)
+
+Action Urgency Indicator = 
+IF (
+    MAX ( fct_flight_regulatory_predictions[is_tarmac_risk] ) = TRUE (),
+    "🚨 GATE HOLD MANDATORY",
+    IF (
+        MAX ( fct_flight_regulatory_predictions[is_crew_duty_risk] ) = TRUE (),
+        "⚠️ CALL STANDBY CREW",
+        IF (
+            MAX ( fct_flight_regulatory_predictions[is_cash_refund_mandate] ) = TRUE (),
+            "💵 REFUND PRE-AUTH",
+            "✅ PROCEED NORMAL"
+        )
+    )
+)
+
+// --- 5. Nút Bấm Hành Động & Deep-Link Sang SkyOps Copilot (Phase 6.5) -
+SkyOps Copilot URL = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+RETURN
+IF (
+    ISBLANK ( SelectedFlightID ),
+    "http://skyops.local:8000/?tab=chat",
+    "http://skyops.local:8000/?flight_id=" & SelectedFlightID & "&tab=chat"
+)
+
+SkyOps Dispatch Advisory URL = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+RETURN
+IF (
+    ISBLANK ( SelectedFlightID ),
+    "http://skyops.local:8000/?tab=advisory",
+    "http://skyops.local:8000/?flight_id=" & SelectedFlightID & "&tab=advisory"
+)
+
+SkyOps Button Tooltip = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+VAR Carrier = SELECTEDVALUE ( fct_flight_regulatory_predictions[carrier_code] )
+VAR FlightNum = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_number] )
+RETURN
+IF (
+    ISBLANK ( SelectedFlightID ),
+    "Mở Trợ lý SkyOps Copilot (Chưa chọn chuyến bay)",
+    "Hỏi SkyOps Copilot về chuyến bay " & Carrier & FlightNum & " (ID #" & SelectedFlightID & ")"
+)
+
+// ==================================================================
+// --- 6. NÚT BẤM AI COPILOT TRÊN THANH TIÊU ĐỀ 4 TRANG (PHASE 6.8) -
+// ==================================================================
+// HƯỚNG DẪN THIẾT LẬP NÚT BẤM TRÊN POWER BI DESKTOP:
+// 1. Vào menu Ribbon: Insert > Elements > Buttons > chọn "Blank".
+// 2. Kéo thả nút lên góc phải của Thanh Tiêu Đề (Header Bar) của trang.
+// 3. Trong khung Format > Button:
+//    - Style > Text: Bật On > Bấm fx > Chọn Measure [AI Copilot Header Label - Page X]
+//    - Style > Fill: Bật On > Bấm fx > Chọn Measure [AI Header Button Fill Color]
+//    - Style > Border: Bật On > Bấm fx > Chọn Measure [AI Header Button Border Color]
+// 4. Trong khung Format > Action:
+//    - Bật Action: On
+//    - Type: Chọn "Web URL"
+//    - Web URL: Bấm fx > Chọn Measure [AI Copilot Header URL - Page X]
+//    - Tooltip: Bấm fx > Chọn Measure [AI Copilot Header Tooltip - Page X]
+// ==================================================================
+
+// --- TRANG 1: EXECUTIVE OPERATIONS OVERVIEW -----------------------
+AI Copilot Header URL - Page 1 = 
+VAR BaseURL = "http://skyops.local:8000/embed/chat?page=1"
+VAR SelectedCarrier = SELECTEDVALUE ( dim_airline[carrier_code] )
+VAR SelectedOrigin = SELECTEDVALUE ( dim_airport[airport_code] )
+VAR URLWithCarrier = IF ( ISBLANK ( SelectedCarrier ), BaseURL, BaseURL & "&carrier=" & SelectedCarrier )
+RETURN
+IF ( ISBLANK ( SelectedOrigin ), URLWithCarrier, URLWithCarrier & "&origin=" & SelectedOrigin )
+
+AI Copilot Header Label - Page 1 = "💬 Trợ Lý AI Vận Hành"
+
+AI Copilot Header Tooltip - Page 1 = 
+VAR SelectedCarrier = SELECTEDVALUE ( dim_airline[airline_name], "Toàn mạng lưới" )
+RETURN
+"Mở Trợ lý AI Phân tích Vận hành, OTP & Hủy chuyến cho " & SelectedCarrier & " (Trang 1: Executive Operations Overview)"
+
+// --- TRANG 2: DELAY ROOT-CAUSE & CASCADING ANALYSIS ---------------
+AI Copilot Header URL - Page 2 = 
+VAR BaseURL = "http://skyops.local:8000/embed/chat?page=2"
+VAR SelectedCarrier = SELECTEDVALUE ( dim_airline[carrier_code] )
+RETURN
+IF ( ISBLANK ( SelectedCarrier ), BaseURL, BaseURL & "&carrier=" & SelectedCarrier )
+
+AI Copilot Header Label - Page 2 = "💬 Chẩn Đoán AI Domino"
+
+AI Copilot Header Tooltip - Page 2 = 
+VAR SelectedCarrier = SELECTEDVALUE ( dim_airline[airline_name], "Toàn hệ thống" )
+RETURN
+"Mở Trợ lý AI Chẩn đoán 5 Nguyên nhân Trễ & Hiệu ứng Domino Late Aircraft (~40%) cho " & SelectedCarrier & " (Trang 2)"
+
+// --- TRANG 3: HUB BOTTLENECKS & ROUTE PERFORMANCE -----------------
+AI Copilot Header URL - Page 3 = 
+VAR BaseURL = "http://skyops.local:8000/embed/chat?page=3"
+VAR SelectedOrigin = SELECTEDVALUE ( dim_airport[airport_code] )
+RETURN
+IF ( ISBLANK ( SelectedOrigin ), BaseURL, BaseURL & "&origin=" & SelectedOrigin )
+
+AI Copilot Header Label - Page 3 = "💬 Phân Tích AI Sân Bay"
+
+AI Copilot Header Tooltip - Page 3 = 
+VAR SelectedAirport = SELECTEDVALUE ( dim_airport[airport_name], "Các Siêu Hub (DFW, ORD, ATL)" )
+RETURN
+"Mở Trợ lý AI Phân tích Điểm nghẽn Siêu Hub, Taxi-Out và Giới nghiêm đêm cho " & SelectedAirport & " (Trang 3)"
+
+// --- TRANG 4: AI PREDICTIVE RISK & REGULATORY GOVERNANCE ----------
+AI Copilot Header URL - Page 4 = 
+VAR BaseURL = "http://skyops.local:8000/embed/chat?page=4"
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+RETURN
+IF ( 
+    ISBLANK ( SelectedFlightID ),
+    BaseURL,
+    BaseURL & "&flight_id=" & SelectedFlightID
+)
+
+AI Copilot Header Label - Page 4 = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+VAR SelectedFlight = SELECTEDVALUE ( fct_flight_regulatory_predictions[carrier_code] ) & SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_number] )
+RETURN
+IF (
+    ISBLANK ( SelectedFlightID ),
+    "💬 Thẩm Định AI Pháp Lý",
+    "💬 Thẩm Định #" & SelectedFlight
+)
+
+AI Copilot Header Tooltip - Page 4 = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+VAR SelectedCarrier = SELECTEDVALUE ( fct_flight_regulatory_predictions[carrier_code] )
+VAR SelectedFlightNum = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_number] )
+RETURN
+IF (
+    ISBLANK ( SelectedFlightID ),
+    "Mở Trợ lý AI Thẩm định Rủi ro Trễ & Chế tài Pháp lý 14 CFR (Trang 4)",
+    "Hỏi Trợ lý AI về Chuyến bay " & SelectedCarrier & SelectedFlightNum & " (ID #" & SelectedFlightID & ") - Đánh giá Tarmac 14 CFR § 259.4 & FDP"
+)
+
+// --- NÚT BẤM TOÀN NĂNG THÔNG MINH (UNIVERSAL MASTER BUTTON) -------
+AI Copilot Universal Header URL = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+VAR SelectedCarrier = COALESCE ( SELECTEDVALUE ( fct_flight_regulatory_predictions[carrier_code] ), SELECTEDVALUE ( dim_airline[carrier_code] ) )
+VAR SelectedOrigin = COALESCE ( SELECTEDVALUE ( fct_flight_regulatory_predictions[origin] ), SELECTEDVALUE ( dim_airport[airport_code] ) )
+RETURN
+IF (
+    NOT ISBLANK ( SelectedFlightID ),
+    "http://skyops.local:8000/embed/chat?page=4&flight_id=" & SelectedFlightID,
+    IF (
+        NOT ISBLANK ( SelectedOrigin ),
+        "http://skyops.local:8000/embed/chat?page=3&origin=" & SelectedOrigin,
+        IF (
+            NOT ISBLANK ( SelectedCarrier ),
+            "http://skyops.local:8000/embed/chat?page=2&carrier=" & SelectedCarrier,
+            "http://skyops.local:8000/embed/chat?page=1"
+        )
+    )
+)
+
+AI Copilot Universal Header Tooltip = 
+VAR SelectedFlightID = SELECTEDVALUE ( fct_flight_regulatory_predictions[flight_id] )
+RETURN
+IF (
+    NOT ISBLANK ( SelectedFlightID ),
+    "Mở Trợ lý SkyOps AI phân tích chuyên sâu cho Chuyến bay #" & SelectedFlightID,
+    "Mở Trợ lý SkyOps AI Copilot (Khung chat nhúng siêu gọn đa năng 4 trang)"
+)
+
+AI Copilot Universal Header Label = "🤖 SkyOps AI Copilot"
+
+// --- ĐỊNH DẠNG MÀU SẮC NÚT BẤM (CONDITIONAL / THEME FORMATTING) ---
+AI Header Button Fill Color = "#F0F9FF"
+
+AI Header Button Text Color = "#0284C7"
+
+AI Header Button Border Color = "#BAE6FD"
+
+
+
+

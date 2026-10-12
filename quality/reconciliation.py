@@ -15,7 +15,22 @@ row is accounted for; it FAILS only on unexplained loss (a real breakage).
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
 import sys
+
+# Auto-re-exec in project virtualenv if running in system Python and tabulate is not present
+try:
+    import tabulate  # noqa: F401
+except ModuleNotFoundError:
+    project_root = Path(__file__).resolve().parent.parent
+    venv_py = project_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        cmd = [str(venv_py), "-m", "quality.reconciliation"] + sys.argv[1:]
+        res = subprocess.run(cmd)
+        sys.exit(res.returncode)
+    raise
 
 from tabulate import tabulate
 
@@ -66,21 +81,37 @@ def _source_rows(con, spec: dict) -> int:
 
 def _table_exists(con, fqname: str) -> bool:
     schema, table = fqname.split(".")
+    if settings.warehouse == "postgres":
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+                (schema, table),
+            )
+            return cur.fetchone()[0] > 0
     q = ("SELECT COUNT(*) FROM information_schema.tables "
          "WHERE table_schema = ? AND table_name = ?")
     return con.sql(q, params=[schema, table]).fetchone()[0] > 0
 
 
 def _count(con, fqname: str) -> int:
+    if settings.warehouse == "postgres":
+        with con.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {fqname}")
+            return cur.fetchone()[0]
     return con.sql(f"SELECT COUNT(*) FROM {fqname}").fetchone()[0]
 
 
 def _distinct(con, fqname: str, key: str) -> int:
+    if settings.warehouse == "postgres":
+        with con.cursor() as cur:
+            cur.execute(f"SELECT COUNT(DISTINCT {key}) FROM {fqname}")
+            return cur.fetchone()[0]
     return con.sql(f"SELECT COUNT(DISTINCT {key}) FROM {fqname}").fetchone()[0]
 
 
 def run() -> int:
-    con = get_duckdb_connection(read_only=True)
+    from config import get_connection
+    con = get_connection(read_only=True)
     rows, report, overall_ok = [], [], True
     try:
         for spec in RECON_SPEC:

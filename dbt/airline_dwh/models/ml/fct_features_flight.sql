@@ -34,7 +34,7 @@ rolling_route as (
     from daily_route
     window w as (
         partition by origin_airport, dest_airport order by flight_date
-        range between interval 30 days preceding and interval 1 day preceding
+        range between interval '30 days' preceding and interval '1 day' preceding
     )
 ),
 
@@ -54,7 +54,7 @@ rolling_carrier as (
     from daily_carrier
     window w as (
         partition by carrier_code order by flight_date
-        range between interval 30 days preceding and interval 1 day preceding
+        range between interval '30 days' preceding and interval '1 day' preceding
     )
 ),
 

@@ -19,8 +19,8 @@ select
     trim(airport_name)                   as airport_name,
     {{ title_case('city') }}             as city,
     upper(trim(state))                   as state,
-    cast(latitude as double)             as latitude,
-    cast(longitude as double)            as longitude,
+    cast(latitude as double precision)   as latitude,
+    cast(longitude as double precision)  as longitude,
     cast(tz_offset as integer)           as tz_offset,
     cast(hub_weight as integer)          as hub_weight
 from deduped

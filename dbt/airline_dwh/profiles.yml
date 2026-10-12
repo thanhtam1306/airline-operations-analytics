@@ -1,11 +1,22 @@
-# Two targets, ONE set of models.
-#   local     -> DuckDB file written by the ingestion step (default)
-#   snowflake -> the exact same dbt models, pointed at Snowflake
+# Multi-target profile:
+#   postgres  -> PostgreSQL server (local:5432 or Docker)
+#   local     -> DuckDB file (default lightweight)
+#   snowflake -> cloud warehouse
 #
-# Switch with:  dbt build --target snowflake   (after `pip install dbt-snowflake`)
+# Switch with:  dbt build --target postgres   (or set DBT_TARGET=postgres)
 airline_dwh:
-  target: local
+  target: "{{ env_var('DBT_TARGET', 'postgres') }}"
   outputs:
+    postgres:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      user: "{{ env_var('POSTGRES_USER', 'postgres') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', '123456') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | as_number }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'airline_dwh') }}"
+      schema: "{{ env_var('POSTGRES_SCHEMA', 'raw') }}"
+      threads: 4
+
     local:
       type: duckdb
       path: "{{ env_var('DBT_DUCKDB_PATH', '../../warehouse/airline.duckdb') }}"

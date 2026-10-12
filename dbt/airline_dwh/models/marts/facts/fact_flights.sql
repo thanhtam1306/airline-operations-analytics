@@ -19,7 +19,7 @@ with flights as (
     -- process only new days (+ lookback window for late/corrected data)
     where flight_date > (
         select coalesce(max(flight_date), '1900-01-01'::date)
-               - interval '{{ var("lookback_days", 3) }}' day
+               - interval '{{ var("lookback_days", 3) }} days'
         from {{ this }}
     )
     {% endif %}
@@ -28,7 +28,11 @@ with flights as (
 select
     -- degenerate + surrogate keys
     flight_id,
+    {% if target.type == 'postgres' %}
+    cast(to_char(flight_date, 'YYYYMMDD') as integer) as date_key,
+    {% else %}
     cast(strftime(flight_date, '%Y%m%d') as integer) as date_key,
+    {% endif %}
     md5(origin_airport)                              as origin_airport_key,
     md5(dest_airport)                                as dest_airport_key,
     md5(carrier_code)                                as airline_key,

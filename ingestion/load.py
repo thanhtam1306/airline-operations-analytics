@@ -23,7 +23,26 @@ logger = get_logger("ingestion.load")
 AUDIT_TABLE = f"{settings.raw_schema}._ingestion_audit"
 
 
-def ensure_audit_table(con) -> None:
+def ensure_audit_table(con=None) -> None:
+    if settings.warehouse == "postgres":
+        from config import get_postgres_connection
+        pg_con = con if con is not None else get_postgres_connection()
+        with pg_con.cursor() as cur:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {AUDIT_TABLE} (
+                    batch_id        VARCHAR,
+                    source_file     VARCHAR,
+                    target_table    VARCHAR,
+                    rows_extracted  BIGINT,
+                    rows_loaded     BIGINT,
+                    loaded_at       TIMESTAMP,
+                    status          VARCHAR
+                );
+                """
+            )
+        return
+
     con.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {AUDIT_TABLE} (
@@ -43,6 +62,33 @@ def load_dataframe(con, df: pd.DataFrame, table: str, source_file: str, batch_id
     """Full-refresh a raw table from a DataFrame and write an audit row."""
     target = f"{settings.raw_schema}.{table}"
     rows_extracted = len(df)
+
+    if settings.warehouse == "postgres":
+        from sqlalchemy import text
+        from config import get_postgres_engine
+
+        df_loaded = df.copy()
+        df_loaded["_loaded_at"] = datetime.utcnow()
+        df_loaded["_source_file"] = source_file
+        df_loaded["_batch_id"] = batch_id
+
+        engine = get_postgres_engine()
+        df_loaded.to_sql(table, con=engine, schema=settings.raw_schema, if_exists="replace", index=False)
+
+        with engine.connect() as conn:
+            rows_loaded = conn.execute(text(f"SELECT COUNT(*) FROM {target}")).scalar()
+            status = "OK" if rows_loaded == rows_extracted else "ROW_COUNT_MISMATCH"
+            conn.execute(
+                text(
+                    f"INSERT INTO {AUDIT_TABLE} (batch_id, source_file, target_table, rows_extracted, rows_loaded, loaded_at, status) "
+                    f"VALUES (:b, :s, :t, :re, :rl, :la, :st)"
+                ),
+                {"b": batch_id, "s": source_file, "t": target, "re": rows_extracted, "rl": rows_loaded, "la": datetime.utcnow(), "st": status},
+            )
+            conn.commit()
+
+        logger.info("loaded %-22s rows=%s status=%s", target, f"{rows_loaded:,}", status)
+        return rows_loaded
 
     con.register("_incoming_df", df)
     con.execute(

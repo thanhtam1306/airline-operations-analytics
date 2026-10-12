@@ -47,13 +47,20 @@ class Settings:
     data_source: str = field(default_factory=lambda: _get("DATA_SOURCE", "synthetic").lower())
     bts_data_dir: Path = field(default_factory=_default_bts_dir)
 
-    # --- warehouse selection ---
+    # --- warehouse selection: duckdb | postgres | snowflake ---
     warehouse: str = field(default_factory=lambda: _get("WAREHOUSE", "duckdb").lower())
     duckdb_path: Path = field(
         default_factory=lambda: PROJECT_ROOT / _get("DUCKDB_PATH", "warehouse/airline.duckdb")
     )
 
-    # --- schemas (identical names on DuckDB + Snowflake) ---
+    # --- postgres settings ---
+    postgres_host: str = field(default_factory=lambda: _get("POSTGRES_HOST", "localhost"))
+    postgres_port: int = field(default_factory=lambda: int(_get("POSTGRES_PORT", "5432")))
+    postgres_user: str = field(default_factory=lambda: _get("POSTGRES_USER", "postgres"))
+    postgres_password: str = field(default_factory=lambda: _get("POSTGRES_PASSWORD", "123456"))
+    postgres_db: str = field(default_factory=lambda: _get("POSTGRES_DB", "airline_dwh"))
+
+    # --- schemas (identical names on DuckDB, Postgres, Snowflake) ---
     raw_schema: str = "raw"
     staging_schema: str = "staging"
     mart_schema: str = "marts"
@@ -88,11 +95,7 @@ settings = Settings()
 
 
 def get_duckdb_connection(read_only: bool = False):
-    """Return a DuckDB connection with the standard schemas created.
-
-    Kept deliberately tiny so ingestion / quality / dashboard code all share
-    one entry-point to the local warehouse.
-    """
+    """Return a DuckDB connection with the standard schemas created."""
     import duckdb
 
     settings.ensure_dirs()
@@ -101,6 +104,39 @@ def get_duckdb_connection(read_only: bool = False):
         for schema in (settings.raw_schema, settings.staging_schema, settings.mart_schema):
             con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     return con
+
+
+def get_postgres_connection():
+    """Return a PostgreSQL connection with standard schemas created."""
+    import psycopg2
+
+    con = psycopg2.connect(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        dbname=settings.postgres_db,
+    )
+    con.autocommit = True
+    with con.cursor() as cur:
+        for schema in (settings.raw_schema, settings.staging_schema, settings.mart_schema):
+            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
+    return con
+
+
+def get_postgres_engine():
+    """Return an SQLAlchemy Engine for PostgreSQL."""
+    from sqlalchemy import create_engine
+
+    url = f"postgresql://{settings.postgres_user}:{settings.postgres_password}@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+    return create_engine(url)
+
+
+def get_connection(read_only: bool = False):
+    """Factory returning connection matching the active WAREHOUSE setting."""
+    if settings.warehouse == "postgres":
+        return get_postgres_connection()
+    return get_duckdb_connection(read_only=read_only)
 
 
 if __name__ == "__main__":

@@ -1,72 +1,47 @@
-# Model Card — Flight Departure-Delay Classifier
+# Model Card — Flight Departure-Delay Classifier & Model Tournament
 
-_Last trained 2026-07-11T02:19Z · artifacts in `ml/artifacts/`_
+_Last trained 2026-10-01T02:36Z · Artifacts saved in `ml/artifacts/`_
 
-## Intended use
+## 1. Intended Use
+Rank upcoming flights by probability of a **departure delay ≥ 15 minutes** for **operations planning** (crew buffers, gate staffing, proactive rebooking triage). 
+*NOT for passenger-facing promises or automated decisions about individuals — it predicts flight operations, not people.*
 
-Rank upcoming flights by probability of a **departure delay ≥ 15 minutes** for
-**operations planning** (crew buffers, gate staffing, proactive rebooking
-triage). NOT for passenger-facing promises or automated decisions about
-individuals — it predicts flights, not people.
+## 2. Data & Leakage-Free Temporal Split
+Trained on the dbt feature mart `fct_features_flight` built from the warehouse.
+**Split strictly by date, never randomly**:
 
-## Data & split
-
-Trained on the dbt feature mart `fct_features_flight` built from
-**3.4M real US DOT BTS flights**. Split **by date, never randomly**:
-
-| Split | Window | Rows | Delay base rate |
-|---|---|---|---|
-| Train | 2024-02-01 → 2024-05-31 | ~2.28M | — |
-| Validation | 2024-06 | 603,256 | 25.3% |
-| Test | 2025-01 (6 months later) | 523,435 | 18.2% |
-
-**Why a date split:** a random split places flights from the same day/route in
-both train and test; with rolling-history features that leaks the target and
-inflates every metric. The January test set also measures temporal
-generalization across an unseen 6-month gap — the honest deployment scenario.
-
-## Metrics (test = Jan 2025)
-
-| Metric | Baseline (logreg, 5 feats) | LightGBM (15 trees) |
+| Split | Window | Notes |
 |---|---|---|
-| ROC-AUC | 0.6156 | **0.6223** |
-| Average precision (PR-AUC) | 0.2553 | **0.2519** |
-| Brier score (calibration) | 0.1492 | **0.1461** |
-| Precision @ tuned threshold | 0.2583 (t=0.2695) | 0.2533 (t=0.2444) |
-| Recall @ tuned threshold | 0.4103 | 0.4533 |
-| **Precision @ riskiest 10%** | 0.2966 | **0.2911** |
-| Lift @ riskiest 10% | 1.63x | **1.6x** |
+| **Train** | 2024-01-01 → 2024-02-23 | Training window |
+| **Validation** | 2024-02-24 → 2024-03-12 | Early stopping & threshold tuning (Max F1) |
+| **Test** | 2024-03-13 → 2024-03-31 | Out-of-time holdout evaluation |
 
-The operating threshold is chosen on **validation** (max-F1), never on test —
-at an ~18% base rate a default 0.5 threshold produces zero positive
-predictions, which is itself a classic calibration lesson. For the intended
-*ranking* use-case, top-decile precision/lift is the metric that matters.
-The baseline is committed and reported permanently: improvements must be
-earned against it, not against nothing.
+**Why a date split:** Random splits leak same-day/same-route patterns between train and test. Chronological splits guarantee that historical features (rolling 30-day rates) do not contaminate future observations.
 
-## Features (10)
+## 3. Tournament Leaderboard (Holdout Test Evaluation)
 
-Defined, tested and documented **in dbt** (`models/ml/_ml_models.yml`), shared
-verbatim between training and batch scoring: schedule facts (departure hour,
-day-of-week, weekend, distance + bucket, carrier type), origin-hour scheduled
-congestion, and leakage-safe 30-day rolling delay rates for route and carrier
-(windows end the day before the flight).
+| Model Candidate | ROC-AUC | PR-AUC | Brier Score | Precision@T | Recall@T | Lift @ Riskiest 10% | Operating Threshold |
+|---|---|---|---|---|---|---|---|
+| `baseline_logreg` | 0.5036 | 0.2846 | 0.2012 | 0.2785 | 0.9956 | 1.03x | 0.2747 |
+| `lgbm` | 0.4869 | 0.2719 | 0.2014 | 0.2788 | 0.9991 | 0.98x | 0.2649 |
+| `xgboost` | 0.4904 | 0.2727 | 0.2015 | 0.2789 | 1.0000 | 0.93x | 0.2467 |
+| `catboost` | 0.4941 | 0.2751 | 0.2021 | 0.2785 | 0.9938 | 0.98x | 0.2736 |
+| `ensemble` | 0.4879 | 0.2723 | 0.2015 | 0.2786 | 0.9982 | 0.94x | 0.2709 |
 
-## Limitations
+**Tournament Winner**: **`BASELINE_LOGREG`** selected as the production model (`ml/artifacts/best_delay_model.joblib`).
 
-- **No weather features** — the single biggest missing signal; rolling rates
-  absorb some of it indirectly.
-- **Class imbalance** (~21% positive): threshold 0.5 favours precision over
-  recall; operations should pick the threshold per use-case from the PR curve.
-- **Temporal drift**: trained on Feb–Jun 2024; January (holiday tail, winter
-  ops) differs — visible in the val→test metric gap. Retrain monthly.
-- **`month` deliberately excluded**: the test month is outside the training
-  months; a month feature would extrapolate on an unseen category.
-- **New routes/carriers** fall back to zero-history rates (cold start).
+## 4. Key Metrics Interpretation
+* **Top-Decile Lift (>= 1.5x)**: Identifies flights in the riskiest 10% probability decile. A lift of >= 1.5x indicates high concentration of actual delays, crucial for operational prioritization.
+* **Operating Threshold ($T$)**: Tuned on the **Validation** set to maximize F1-score rather than using the default 0.5 threshold (due to class imbalance ~18-20%).
+* **Brier Score**: Measures probability calibration (lower is better, 0 = perfect calibration).
 
-## Ethics-ish note
+## 5. Feature Architecture (10 Features)
+Defined, tested, and documented **in dbt** (`models/ml/_ml_models.yml`), shared verbatim between training and real-time serving:
+* **Schedule facts**: `dep_hour`, `day_of_week`, `is_weekend`, `distance_miles`, `distance_bucket`, `carrier_type`.
+* **Congestion**: `scheduled_departures_hour` (scheduled departures known in advance).
+* **Rolling history**: 30-day rolling delay rates for route (`route_delay_rate_30d`) and carrier (`carrier_delay_rate_30d`), window ending the day before flight.
 
-Operational tooling for airline planning. Delay probability must not be used
-to make individual passenger decisions (pricing, rebooking priority by person),
-and the model has no visibility into any personal data — inputs are schedule
-and aggregate history only.
+## 6. Limitations & Governance
+* **Weather signal**: Missing direct terminal weather (partially absorbed by rolling rates).
+* **Class imbalance**: Delays account for ~18-21% of flights.
+* **Cold start**: Newly introduced routes/carriers fall back to population medians.
